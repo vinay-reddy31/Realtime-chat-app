@@ -4,6 +4,7 @@ const next = require("next");
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
+const { v4: uuidv4 } = require("uuid"); 
 require("dotenv").config({ path: ".env.local" });
 
 const dev = process.env.NODE_ENV !== "production";
@@ -33,7 +34,12 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const convSchema = new mongoose.Schema({
-  roomId: { type: String, unique: true },
+  roomId: { 
+    type: String, 
+    required: true,  // now required
+    unique: true,    // must be unique
+    default: uuidv4  // ⬅️ auto-generate on create
+  },
   participants: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   lastMessageAt: Date,
 }, { timestamps: true });

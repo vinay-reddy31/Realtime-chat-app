@@ -13,7 +13,7 @@ export interface IMessage extends Document {
 const MessageSchema = new mongoose.Schema<IMessage>(
   {
     conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true },
-    roomId: { type: String, required: true },
+    roomId: { type: String, required: false },
     from: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     to: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     text: { type: String, required: true },

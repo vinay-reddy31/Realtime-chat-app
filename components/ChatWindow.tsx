@@ -1,14 +1,14 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import Link from "next/link";
 import { initSocket, getSocket } from "../lib/socket";
 
 type Msg = {
   id: string;
-  from: string;
-  to: string;
+  from: string;      // always normalized to a plain string
+  to: string;        // always normalized to a plain string
   text: string;
-  createdAt: string;
+  createdAt: string; // ISO string
   roomId?: string;
 };
 
@@ -23,32 +23,52 @@ export default function ChatWindow({ roomId }: { roomId: string }) {
 
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
+  /** Robustly normalize anything that might represent a Mongo ID into a plain string */
   function normalizeId(id: any): string {
     if (!id) return "";
     if (typeof id === "string") return id.trim();
-    if (typeof id === "object" && "$oid" in id) return String(id.$oid).trim();
+
+    // Mongoose ObjectId instance
+    if (typeof id === "object") {
+      // Extended JSON { $oid: '...' }
+      if ("$oid" in id && typeof (id as any).$oid === "string") {
+        return String((id as any).$oid).trim();
+      }
+      // Populated doc { _id, name, ... } or nested {_id: ObjectId}
+      if ("_id" in id) {
+        return normalizeId((id as any)._id);
+      }
+      // Raw ObjectId with toHexString()
+      if (typeof (id as any).toHexString === "function") {
+        return (id as any).toHexString();
+      }
+      // Fallback to string
+      if (typeof (id as any).toString === "function") {
+        return (id as any).toString().trim();
+      }
+    }
     return String(id).trim();
   }
+
+  const myIdNorm = useMemo(() => (myId ? normalizeId(myId) : ""), [myId]);
 
   // Effect 1: Load myId from localStorage once.
   useEffect(() => {
     const userId = localStorage.getItem("userId");
     if (!userId) {
       setError("Please login first");
-    } else {
-      setMyId(userId.trim());
-    }
-  }, []);
-
-  // Effect 2: Fetch data and set up socket only after myId is available.
-  useEffect(() => {
-    if (!myId) {
-      if (!error) setLoading(true);
+      setLoading(false);
       return;
     }
+    setMyId(userId.trim());
+  }, []);
 
-    const ids = roomId.split("_");
-    const extractedPeerId = ids.find((id) => id !== myId);
+  // Effect 2: Fetch peer + messages and set up socket after myId is available.
+  useEffect(() => {
+    if (!myIdNorm) return;
+
+    const ids = roomId.split("_").map((s) => s.trim());
+    const extractedPeerId = ids.find((id) => id !== myIdNorm);
     if (!extractedPeerId) {
       setError("Invalid room ID");
       setLoading(false);
@@ -56,20 +76,22 @@ export default function ChatWindow({ roomId }: { roomId: string }) {
     }
     setPeerId(extractedPeerId);
 
+    // Fetch peer info
     fetch(`/api/users/${extractedPeerId}`)
       .then((r) => (r.ok ? r.json() : Promise.reject("Failed to fetch peer")))
-      .then((user) => setPeerName(user.name || "Unknown User"))
+      .then((user) => setPeerName(user?.name || "Unknown User"))
       .catch(() => setPeerName("Unknown User"));
 
+    // Fetch messages
     fetch(`/api/conversations/${roomId}/messages`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((data: any[]) => {
-        const normalized = data.map((m) => ({
+        const normalized: Msg[] = data.map((m) => ({
           id: normalizeId(m._id),
-          from: normalizeId(m.from),
+          from: normalizeId(m.from), // works for string/ObjectId/populated object
           to: normalizeId(m.to),
           text: m.text,
-          createdAt: m.createdAt,
+          createdAt: new Date(m.createdAt).toISOString(),
           roomId: m.roomId,
         }));
         setMessages(normalized);
@@ -80,19 +102,23 @@ export default function ChatWindow({ roomId }: { roomId: string }) {
         setLoading(false);
       });
 
+    // Socket init
     const token = localStorage.getItem("token") || undefined;
     const socket = initSocket(token);
     socket.emit("join_room", { roomId });
 
     const onMsg = (m: Msg) => {
-      const normalizedMsg = {
+      const normalizedMsg: Msg = {
         ...m,
         from: normalizeId(m.from),
         to: normalizeId(m.to),
+        createdAt: new Date(m.createdAt).toISOString(),
       };
+
+      // Accept either exact room match or a defensive pair match
       if (
         normalizedMsg.roomId === roomId ||
-        ([normalizedMsg.from, normalizedMsg.to].includes(myId!) &&
+        ([normalizedMsg.from, normalizedMsg.to].includes(myIdNorm) &&
           [normalizedMsg.from, normalizedMsg.to].includes(extractedPeerId))
       ) {
         setMessages((prev) => [...prev, normalizedMsg]);
@@ -103,8 +129,9 @@ export default function ChatWindow({ roomId }: { roomId: string }) {
     return () => {
       socket.off("private_message", onMsg);
     };
-  }, [roomId, myId, error]);
+  }, [roomId, myIdNorm]);
 
+  // Auto-scroll on new messages
   useEffect(() => {
     if (messagesRef.current) {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
@@ -112,7 +139,7 @@ export default function ChatWindow({ roomId }: { roomId: string }) {
   }, [messages]);
 
   function send() {
-    if (!text.trim() || !myId || !peerId) return;
+    if (!text.trim() || !myIdNorm || !peerId) return;
     const socket = getSocket();
     if (!socket) {
       setError("Chat connection lost. Please refresh.");
@@ -142,10 +169,11 @@ export default function ChatWindow({ roomId }: { roomId: string }) {
       </div>
     );
   }
-  if (!myId) return null;
+  if (!myIdNorm) return null;
 
   return (
     <div className="border rounded p-4 bg-white">
+      {/* Header */}
       <div className="flex items-center justify-between mb-4 pb-3 border-b">
         <div className="flex items-center space-x-3">
           <Link
@@ -161,13 +189,13 @@ export default function ChatWindow({ roomId }: { roomId: string }) {
         </div>
       </div>
 
+      {/* Messages */}
       <div ref={messagesRef} className="h-96 overflow-auto mb-4 space-y-3">
         {messages.length === 0 ? (
           <div className="text-center text-gray-400 mt-8">No messages yet.</div>
         ) : (
           messages.map((m) => {
-            const isOwn = normalizeId(m.from) === normalizeId(myId);
-            const label = isOwn ? "Sent" : "Received";
+            const isOwn = m.from === myIdNorm; // already normalized
             return (
               <div
                 key={m.id}
@@ -180,12 +208,7 @@ export default function ChatWindow({ roomId }: { roomId: string }) {
                       : "bg-gray-100 text-black self-start"
                   }`}
                 >
-                  <div className="flex items-center space-x-2">
-                    <span className={`text-[10px] font-semibold uppercase ${isOwn ? "text-blue-200" : "text-gray-400"}`}>
-                      {label}
-                    </span>
-                    <span className="text-sm">{m.text}</span>
-                  </div>
+                  <div className="text-sm break-words">{m.text}</div>
                   <div
                     className={`text-[10px] mt-2 ${
                       isOwn
@@ -205,6 +228,7 @@ export default function ChatWindow({ roomId }: { roomId: string }) {
         )}
       </div>
 
+      {/* Input */}
       <div className="flex gap-2">
         <input
           value={text}
