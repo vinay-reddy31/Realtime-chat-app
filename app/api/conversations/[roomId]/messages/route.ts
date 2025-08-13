@@ -1,6 +1,5 @@
 // app/api/conversations/[roomId]/messages/route.ts
 import { NextResponse } from "next/server";
-import mongoose from "mongoose";
 import { dbConnect } from "@/lib/dbConnect";
 import Conversation from "@/models/Conversation";
 import Message from "@/models/Message";

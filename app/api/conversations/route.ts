@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "../../../lib/dbConnect";
 import Conversation from "../../..//models/Conversation";
 import Message from "../../..//models/Message";
-import User from "../../..//models/User"; // ✅ Import just for schema registration
 
 export async function GET(request: NextRequest) {
   try {
